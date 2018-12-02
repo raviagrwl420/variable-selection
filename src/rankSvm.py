@@ -1,12 +1,11 @@
-
 from sklearn import svm, linear_model
 from sklearn.model_selection import KFold
 from sklearn.svm import SVC
 
 
 
-class rankSvm(object):
-    def svmRank(X,y):
+class svm(object):
+    def rank(X,y):
         kf = KFold(n_splits=len(X))
         for train, test in kf.split(X):
             print("%s %s" % (train, test))
