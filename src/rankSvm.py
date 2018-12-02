@@ -1,11 +1,6 @@
-import itertools
-import numpy as np
-from scipy import stats
-import pylab as pl
+
 from sklearn import svm, linear_model
 from sklearn.model_selection import KFold
-from sklearn.model_selection import StratifiedShuffleSplit
-from sklearn.model_selection import cross_val_score
 from sklearn.svm import SVC
 
 
