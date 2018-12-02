@@ -1,5 +1,5 @@
 from sklearn.model_selection import KFold, cross_val_score
-from sklearn.svm import SVR
+from sklearn.svm import SVC
 
 
 
@@ -10,6 +10,6 @@ class svm(object):
         for train, test in kf.split(X):
             print("%s %s" % (train, test))
         X_train, X_test, y_train, y_test = X[train], X[test], y[train], y[test]
-        clf = SVR(gamma='auto')
+        clf = SVC(gamma='auto')
         clf.fit(X_train, y_train)
         return clf.score(X_test, y_test)
