@@ -1,3 +1,7 @@
+import itertools
+
+import torch
+
 import torch.nn as nn
 import torch.optim as optim
 
@@ -22,27 +26,30 @@ class NNRank(nn.Module):
 	def forward(self, inputs):
 		return self.model(inputs)
 
-	def train(self, inputs, targets):
+	def train(self, inputs, targets, num_epoch):
 		# Initialize criterion as MarginRankingLoss 
 		criterion = nn.MarginRankingLoss()
 
 		# Initialize optimizer
 		optimizer = optim.SGD(list(self.fc1.parameters()) + list(self.fc2.parameters()),
-			lr=0.001, momentum=0.9)
+			lr=0.0001, momentum=0.9, weight_decay=0.01)
 
-		# Select all the items with target class 1 i.e good variables
-		item1 = torch.index_select(targets==1)
-		# Select all the items with target class 0 i.e. bad variables
-		item2 = torch.index_select(targets==0)
-		# Use all combinations of item1 and item2 along with the corresponding targets
-		modified_targets = # TODO: Compute!!
-
-		for epoch in range(NUM_EPOCH):
+		for epoch in range(num_epoch):
 			# Zero the parameter gradients
 			optimizer.zero_grad()
 
 			# Forward + backward + optimize
 			outputs = self.forward(inputs)
+
+			# Select all the items with target class 1 i.e good variables
+			outputs1 = torch.index_select(outputs, 0, torch.tensor(targets==1, dtype=torch.long).nonzero().reshape(-1,))
+			# Select all the items with target class 0 i.e. bad variables
+			outputs0 = torch.index_select(outputs, 0, torch.tensor(targets==0, dtype=torch.long).nonzero().reshape(-1,))
+			# Use all combinations of item1 and item2 along with the corresponding targets
+			pairs = list(itertools.product(outputs1, outputs0))
+			item1 = torch.stack([pair[0] for pair in pairs])
+			item2 = torch.stack([pair[1] for pair in pairs])
+			modified_targets = torch.ones(len(pairs))
 
 			# item1 is the first item from the pair
 			# item2 is the second item from the pair
