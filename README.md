@@ -28,3 +28,6 @@ python main.py
 
 ## Date
 November 25th, 2018
+
+## References
+* Graph Convolutional Networks (https://github.com/tkipf/pygcn)
