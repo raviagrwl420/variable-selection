@@ -1,3 +1,4 @@
+#uses method from https://gist.github.com/agramfort/2071994
 from sklearn.model_selection import KFold, cross_val_score
 from sklearn.svm import SVC
 from sklearn.model_selection import StratifiedShuffleSplit
@@ -31,7 +32,9 @@ def transform_pairwise(X,y):
 
 #input vector of X and y train and test vectors 
 def max_rank(X,y):
-    # split into train and test set
+    #this function trains the svm model using X[0]
+    #it thens uses this model to rank the other vectors in X
+    #returns the vector with the highest rank
     result=[]
     cv = StratifiedShuffleSplit(test_size=.5)
     for train, test in cv.split(X[0],y[0]):
@@ -51,7 +54,6 @@ def max_rank(X,y):
         
     
 class RankSVM(svm.SVC):
-    #Trains the Model
     def fit(self,X,y,sample_weight=None):
         X_trans, y_trans = transform_pairwise(X, y)
         self.kernel='poly'
