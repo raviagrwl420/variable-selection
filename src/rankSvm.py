@@ -29,14 +29,38 @@ def transform_pairwise(X,y):
             X_new[-1] = - X_new[-1]
     return np.asarray(X_new), np.asarray(y_new).ravel()
 
-class RankSVM(svm.SVC):
+#input vector of X and y train and test vectors 
+def max_rank(X,y):
+    # split into train and test set
+    result=[]
+    cv = StratifiedShuffleSplit(test_size=.5)
+    for train, test in cv.split(X[0],y[0]):
+        X_train, y_train = X[0][train], y[0][train]
+        X_test, y_test = X[0][test], y[0][test]
+    Y = np.c_[y[0], np.mod(np.arange(len(y[0])), 2)]  # add query fake id
+    rank_svm = RankSVM().fit(X[0][train], Y[train])
+    for i,j in zip(X,y):
+        cv = StratifiedShuffleSplit(test_size=.5)
+        for train, test in cv.split(i,j):
+            X_train, y_train = i[train], j[train]
+            X_test, y_test = i[test], j[test]
+        Y = np.c_[j, np.mod(np.arange(len(j)), 2)]  # add query fake id
+        result.append(rank_svm.rank(i[test], j[test]))
+    return X[result.index(max(result))]
+        
+        
     
-    def fit(self,X,y):
+class RankSVM(svm.SVC):
+    #Trains the Model
+    def fit(self,X,y,sample_weight=None):
         X_trans, y_trans = transform_pairwise(X, y)
         self.kernel='poly'
         self.degree=2
         self.C=.1
-        super(RankSVM, self).fit(X_trans, y_trans)
+        if not np.any(sample_weight):
+            super(RankSVM, self).fit(X_trans, y_trans)
+        else:
+            super(RankSVM, self).fit(X_trans, y_trans,sample_weight=sample_weight)
         return self
     
     def predict(self, X):
@@ -45,6 +69,7 @@ class RankSVM(svm.SVC):
         else:
             raise ValueError("Must call fit() prior to predict()")
 
-    def score(self, X, y):
+    def rank(self, X, y):
         X_trans, y_trans = transform_pairwise(X, y)
         return np.mean(super(RankSVM, self).predict(X_trans) == y_trans)
+
