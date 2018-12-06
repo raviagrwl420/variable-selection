@@ -1,4 +1,4 @@
-#from http://fa.bianp.net/blog/2012/learning-to-rank-with-scikit-learn-the-pairwise-transform/
+from sklearn.model_selection import KFold, cross_val_score
 from sklearn.svm import SVC
 from sklearn.model_selection import StratifiedShuffleSplit
 import numpy as np
@@ -7,39 +7,44 @@ import pylab as pl
 from sklearn import svm, linear_model
 import itertools
 from sklearn.model_selection import train_test_split
+from sklearn.model_selection import KFold, cross_val_score
+from sklearn.svm import SVR
 
-def rank(X,y,blocks):
-    cv = StratifiedShuffleSplit(test_size=.5)
-    for train, test in cv.split(X,y):
-        X_train, y_train, b_train = X[train], y[train], blocks[train]
-        X_test, y_test, b_test = X[test], y[test], blocks[test]
-    comb = itertools.combinations(range(X_train.shape[0]), 2)
-    Xp, yp, diff = [], [], []
+def transform_pairwise(X,y):
+    X_new = []
+    y_new = []
+    y = np.asarray(y)
+    if y.ndim == 1:
+        y = np.c_[y, np.ones(y.shape[0])]
+    comb = itertools.combinations(range(X.shape[0]), 2)
     for k, (i, j) in enumerate(comb):
-        if y_train[i] == y_train[j] \
-            or blocks[train][i] != blocks[train][j]:
+        if y[i, 0] == y[j, 0] or y[i, 1] != y[j, 1]:
             # skip if same target or different group
             continue
-        Xp.append(X_train[i] - X_train[j])
-        diff.append(y_train[i] - y_train[j])
-        yp.append(np.sign(diff[-1]))
+        X_new.append(X[i] - X[j])
+        y_new.append(np.sign(y[i, 0] - y[j, 0]))
         # output balanced classes
-        if yp[-1] != (-1) ** k:
-            yp[-1] *= -1
-            Xp[-1] *= -1
-            diff[-1] *= -1
-    Xp,yp,diff = map(np.asanyarray, (Xp, yp, diff))
-    clf=svm.SVC(kernel='linear',C=.1)
-    clf.fit(Xp,yp)
-    coef = clf.coef_.ravel() / np.linalg.norm(clf.coef_)
-    rank={}
-    for i in range(2):
-        tau, _ = stats.kendalltau(
-            np.dot(X_test[b_test == i], coef), y_test[b_test == i])
-            rank[i]=tau
-    return rank
-        
-        
+        if y_new[-1] != (-1) ** k:
+            y_new[-1] = - y_new[-1]
+            X_new[-1] = - X_new[-1]
+    return np.asarray(X_new), np.asarray(y_new).ravel()
 
+class RankSVM(svm.SVC):
+    
+    def fit(self,X,y):
+        X_trans, y_trans = transform_pairwise(X, y)
+        self.kernel='poly'
+        self.degree=2
+        self.C=.1
+        super(RankSVM, self).fit(X_trans, y_trans)
+        return self
+    
+    def predict(self, X):
+        if hasattr(self, 'coef_'):
+            np.argsort(np.dot(X, self.coef_.T))
+        else:
+            raise ValueError("Must call fit() prior to predict()")
 
-
+    def score(self, X, y):
+        X_trans, y_trans = transform_pairwise(X, y)
+        return np.mean(super(RankSVM, self).predict(X_trans) == y_trans)
