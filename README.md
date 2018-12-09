@@ -13,6 +13,9 @@ The implementation uses Python 2.7 along with CPLEX 12.8.
 * Install Python API for CPLEX 12.8
 	* The Python API for CPLEX need to be installed separately. Instructions can be found [here](https://www.ibm.com/support/knowledgecenter/SSSA5P_12.8.0/ilog.odms.cplex.help/CPLEX/GettingStarted/topics/set_up/Python_setup.html)
 
+### Dependencies
+* Pytorch 0.4.1
+
 ## How to run
 ```
 python main.py
@@ -25,3 +28,6 @@ python main.py
 
 ## Date
 November 25th, 2018
+
+## References
+* Graph Convolutional Networks (https://github.com/tkipf/pygcn)
