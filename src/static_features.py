@@ -104,9 +104,22 @@ def lpex2(filename, method):
 
 
 
-    print features
+    return features
 
     #print number_of_contraints_a_variable_participate
+
+
+def normalize(features):
+    for arr in features:
+        max = np.amax(arr)
+        min = np.amin(arr)
+        for i in range(len(arr)):
+            arr[i] = (arr[i] - min)/(max - min)
+
+    print features
+
+    return features
+
 
 
 
@@ -215,4 +228,5 @@ should be used:
     c = "c"
     lpex2(fname, input(prompt))
     '''
-lpex2('aligninq.mps','o')
+features = lpex2('aligninq.mps','o')
+normalized_feature = normalize(features)
