@@ -15,6 +15,7 @@ The implementation uses Python 2.7 along with CPLEX 12.8.
 
 ### Dependencies
 * Pytorch 0.4.1
+* SciPy 1.1.0
 
 ## How to run
 ```
