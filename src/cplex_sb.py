@@ -1,9 +1,15 @@
 from math import floor
 
+import numpy as np
+from scipy.sparse import csr_matrix
+
 import cplex as CPX
 import cplex.callbacks as CPX_CB
 
-cplex = CPX.Cplex("binkar10_1.mps")
+from static_features import StaticFeatures
+from dynamic_features import DynamicFeatures
+
+cplex = CPX.Cplex("data/miplib/30n20b8.mps")
 
 NUM_CANDIDATES = 20
 INFEASIBILITY = 1e6
@@ -31,7 +37,7 @@ def turn_cuts_off(cplex_instance):
 
 def set_parameters(cplex_instance):
     cplex_instance.parameters.mip.strategy.variableselect.set(2)
-    cplex_instance.parameters.mip.limits.nodes.set(50000)
+    cplex_instance.parameters.mip.limits.nodes.set(1)
     cplex_instance.parameters.preprocessing.presolve.set(0)
     cplex_instance.parameters.mip.tolerances.integrality.set(EPSILON)
 
@@ -136,6 +142,23 @@ class MyBranch(CPX_CB.BranchCallback):
 
         return max_var
 
+    def get_dynamic_features(self, candidates):
+        dyn_feat = DynamicFeatures(self, self.stat_feat, candidates)
+
+        # values = np.array(self.get_values())
+        # slacks = np.array(self.get_linear_slacks())
+        # # duals = self.get_dual_values()
+
+        # matrix, rhs = get_static_features(self.cplex)
+
+        # active_constraints = slacks == 0
+        # active_matrix = matrix[active_constraints, :]
+
+        # positive_rhs = rhs > 0
+        # negative_rhs = rhs < 0
+        # print positive_rhs
+        # print negative_rhs
+
 
     def __call__(self):
         # Turn cuts off after root node
@@ -149,6 +172,8 @@ class MyBranch(CPX_CB.BranchCallback):
         candidates = get_candidates(pseudocosts, values)
 
         # Get features
+        self.get_dynamic_features(candidates)
+
         sb_var = self.get_features(candidates)
         sb_val = self.get_values(sb_var)
         obj_val = self.get_objective_value()
@@ -168,12 +193,14 @@ class MyBranch(CPX_CB.BranchCallback):
             self.make_branch(obj_val, variables=[branch], constraints=[], node_data=node_data_clone)
             # self.make_cplex_branch(i, node_data=node_data_clone)
 
+stat_feat = StaticFeatures(cplex)
 
 set_parameters(cplex)
 
 cplex.register_callback(MyBranch)
 MyBranch.cplex = cplex
 MyBranch.cuts_off = False
+MyBranch.stat_feat = stat_feat
 
 cplex.solve()
 

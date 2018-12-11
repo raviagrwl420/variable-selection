@@ -1,129 +1,157 @@
-# Main file
-
-import torch
-import itertools
-
+import cplex
 import numpy as np
 
-#from src.lop import lop
-#from src.nn_rank import NNRank
+from scipy.sparse import csr_matrix
 
-import math
+class DynamicFeatures:
+    def __init__(self, branch_instance, static_features, candidates):
+        # Part 1: Slack and ceil distances
+        self.values = np.array(branch_instance.get_values()).reshape(-1, 1)
+        
+        # 1. Min of slack and ceil
+        ceil = np.ceil(self.values)
+        floor = np.floor(self.values)
+        fractionality = np.minimum(self.values - floor, ceil - self.values)
 
-# lop('RandB/N-p40-01').solve_instance()
+        # 2. Distance from ceil
+        dist_ceil = ceil - self.values
 
-# model = NNRank(100, 5, 1)
+        # Add 1, 2 to features
+        self.features = np.c_[fractionality, dist_ceil]
 
-# inputs = torch.randn(10000).reshape(100, 100)
-# targets = torch.cat((torch.zeros(50), torch.ones(50)), dim=0)
+        # Part 2: Pseudocosts
 
-# model.train(inputs, targets, 100)
+        # 3. Upwards and downwards pseudocosts weighted by fractionality
+        self.pseudocosts = np.array(branch_instance.get_pseudo_costs())
+        up_down_pc = self.pseudocosts * fractionality
+        
+        # 4. Sum of pseudocosts weighted by fractionality
+        sum_pc = np.sum(self.pseudocosts, axis=1).reshape(-1, 1) * fractionality
 
-import cplex as CPX
-import cplex.callbacks as CPX_CB
+        # 5. Ratio of pseudocosts weighted by fractionality
+        ratio_pc = (self.pseudocosts[:, 0] / self.pseudocosts[:, 1]).reshape(-1, 1) * fractionality
+        ratio_pc[np.isnan(ratio_pc)] = 0
+        ratio_pc[np.isinf(ratio_pc)] = 0
 
-c = CPX.Cplex("aligninq.mps")
+        # 6. Prod of pseudocosts weighted by fractionality
+        prod_pc = np.prod(self.pseudocosts, axis=1).reshape(-1, 1) * fractionality
 
-c.parameters.mip.cuts.bqp.set(-1)
-c.parameters.mip.cuts.cliques.set(-1)
-c.parameters.mip.cuts.covers.set(-1)
-c.parameters.mip.cuts.disjunctive.set(-1)
-c.parameters.mip.cuts.flowcovers.set(-1)
-c.parameters.mip.cuts.pathcut.set(-1)
-c.parameters.mip.cuts.gomory.set(-1)
-c.parameters.mip.cuts.gubcovers.set(-1)
-c.parameters.mip.cuts.implied.set(-1)
-c.parameters.mip.cuts.localimplied.set(-1)
-c.parameters.mip.cuts.liftproj.set(-1)
-c.parameters.mip.cuts.mircut.set(-1)
-c.parameters.mip.cuts.mcfcut.set(-1)
-c.parameters.mip.cuts.rlt.set(-1)
-c.parameters.mip.cuts.zerohalfcut.set(-1)
+        # Add 3, 4, 5, 6 to features
+        self.features = np.c_[self.features, up_down_pc, sum_pc, ratio_pc, prod_pc]
 
-# c.parameters.preprocessing.presolve.set(0)
-# c.parameters.mip.display.set(4)
+        # Skipped Parts 3 and 4
+        # Part 5: Min/max ratios of constraint coeffs to RHS
+        rhs = static_features.rhs.reshape(-1, 1)
+        pos_rhs = rhs[rhs > 0]
+        neg_rhs = rhs[rhs < 0]
 
+        mat = static_features.matrix.todense()
+        pos_ratio_matrix = np.divide(mat[(rhs > 0).ravel(), :], pos_rhs.reshape(-1, 1))
+        pos_ratio_matrix = pos_ratio_matrix if pos_ratio_matrix.size else np.zeros((1, mat.shape[1]))
+        neg_ratio_matrix = np.divide(mat[(rhs < 0).ravel(), :], neg_rhs.reshape(-1, 1))
+        neg_ratio_matrix = neg_ratio_matrix if neg_ratio_matrix.size else np.zeros((1, mat.shape[1]))
 
-constraint_degree_stat = [[]]*(c.linear_constraints.get_num())
+        # 7. Min ratio for positive RHS
+        min_ratio_pos = np.transpose(np.min(pos_ratio_matrix, axis=0))
+        
+        # 8. Max ratio for positive RHS
+        max_ratio_pos = np.transpose(np.max(pos_ratio_matrix, axis=0))
 
-class MyBranch(CPX_CB.BranchCallback):
-    def __call__(self):
-        objval = self.get_objective_value()
-        obj = self.get_objective_coefficients()
-        feas = self.get_feasibilities()
+        # 9. Min ratio for negative RHS
+        min_ratio_neg = np.transpose(np.min(neg_ratio_matrix, axis=0))
 
-        # print(objval)
+        # 10. Max ratio for negative RHS
+        max_ratio_neg = np.transpose(np.max(neg_ratio_matrix, axis=0))
 
-        node_data = self.get_node_data()
-        if node_data is None:
-        	node_data = []
+        # Add 7, 8, 9, 10 to features
+        self.features = np.c_[self.features, min_ratio_pos, max_ratio_pos, min_ratio_neg, max_ratio_neg]
 
-        print "this is what's in nodes", node_data
+        # Part 6: Min/max for one-to-all coefficient ratios
+        pos_coeff_matrix = static_features.matrix.copy()
+        pos_coeff_matrix[pos_coeff_matrix < 0] = 0
+        neg_coeff_matrix = static_features.matrix.copy()
+        neg_coeff_matrix[neg_coeff_matrix > 0] = 0
 
-        clone = CPX.Cplex(self.cplex)
-        # clone.parameters.mip.limits.nodes.set(1)
-        clone.set_problem_type(clone.problem_type.LP)
-        for b in node_data:
-        	b_var = b[0]
-        	b_type = b[1]
-        	b_val = b[2]
+        sum_pos_coeffs = np.sum(pos_coeff_matrix, axis=1)
+        sum_neg_coeffs = np.sum(neg_coeff_matrix, axis=1)
 
-        	if b_type == 'L':
-        		clone.variables.set_lower_bounds(b_var, b_val)
-        	elif b_type == 'U':
-        		clone.variables.set_upper_bounds(b_var, b_val)
+        pos_pos_ratio_matrix = pos_coeff_matrix.todense() / sum_pos_coeffs
+        pos_pos_ratio_matrix[np.isnan(pos_pos_ratio_matrix)] = 0
+        pos_pos_ratio_matrix[np.isinf(pos_pos_ratio_matrix)] = 0
+        pos_neg_ratio_matrix = pos_coeff_matrix.todense() / sum_neg_coeffs
+        pos_neg_ratio_matrix[np.isnan(pos_neg_ratio_matrix)] = 0
+        pos_neg_ratio_matrix[np.isinf(pos_neg_ratio_matrix)] = 0
+        neg_neg_ratio_matrix = neg_coeff_matrix.todense() / sum_neg_coeffs
+        neg_neg_ratio_matrix[np.isnan(neg_neg_ratio_matrix)] = 0
+        neg_neg_ratio_matrix[np.isinf(neg_neg_ratio_matrix)] = 0
+        neg_pos_ratio_matrix = neg_coeff_matrix.todense() / sum_pos_coeffs
+        neg_pos_ratio_matrix[np.isnan(neg_pos_ratio_matrix)] = 0
+        neg_pos_ratio_matrix[np.isinf(neg_pos_ratio_matrix)] = 0        
 
-    	clone.set_results_stream(None)
+        pos_pos_ratio_min = np.transpose(np.min(pos_pos_ratio_matrix, axis=0))
+        pos_pos_ratio_max = np.transpose(np.max(pos_pos_ratio_matrix, axis=0))
+        pos_neg_ratio_min = np.transpose(np.min(pos_neg_ratio_matrix, axis=0))
+        pos_neg_ratio_max = np.transpose(np.max(pos_neg_ratio_matrix, axis=0))
+        neg_neg_ratio_min = np.transpose(np.min(neg_neg_ratio_matrix, axis=0))
+        neg_neg_ratio_max = np.transpose(np.max(neg_neg_ratio_matrix, axis=0))
+        neg_pos_ratio_min = np.transpose(np.min(neg_pos_ratio_matrix, axis=0))
+        neg_pos_ratio_max = np.transpose(np.max(neg_pos_ratio_matrix, axis=0))
 
-        num_of_var_in_a_constraint = []
+        self.features = np.c_[self.features, pos_pos_ratio_min, pos_pos_ratio_max, pos_neg_ratio_min, pos_neg_ratio_max,
+            neg_neg_ratio_min, neg_neg_ratio_max, neg_pos_ratio_min, neg_pos_ratio_max]
 
-        for i, row in enumerate(clone.linear_constraints.get_names()):
-            non_zero_in_a_row = 0
-            for j, var in enumerate(c.variables.get_names()):
-                if clone.linear_constraints.get_coefficients(row, var) != 0:
-                    non_zero_in_a_row = non_zero_in_a_row + 1
-            num_of_var_in_a_constraint.append(non_zero_in_a_row)
+        # Part 7: Stats for active constraints
+        slacks = np.array(branch_instance.get_linear_slacks())
+        active_constraints = slacks == 0
+        active_matrix = static_features.matrix[active_constraints, :].todense()
+        count_active_matrix = active_matrix != 0
 
-        for i, var in enumerate(clone.variables.get_names()):
-            for j, row in enumerate(clone.linear_constraints.get_names()):
-                constraint_coeff = clone.linear_constraints.get_coefficients(row, var)
-                if constraint_coeff != 0:
-                    constraint_degree_stat[i].append(num_of_var_in_a_constraint[j])
+        # Unit weighting
+        unit_sum = np.transpose(np.sum(active_matrix, axis=0))
+        unit_mean = np.transpose(np.mean(active_matrix, axis=0))
+        unit_std = np.transpose(np.std(active_matrix, axis=0))
+        unit_min = np.transpose(np.min(active_matrix, axis=0))
+        unit_max = np.transpose(np.max(active_matrix, axis=0))
+        unit_count = np.transpose(np.sum(count_active_matrix, axis=0))
 
+        # Add unit weighting features
+        self.features = np.c_[self.features, unit_sum, unit_mean, unit_std, unit_min, unit_max, unit_count]
 
-    	clone.solve()
+        # Inverse sum all weighting
+        inverse_sum_all = 1 / np.sum(active_matrix, axis=1)
+        inverse_sum_all[np.isnan(inverse_sum_all)] = 0
+        inverse_sum_all[np.isinf(inverse_sum_all)] = 0
+        inverse_sum_all_matrix = np.multiply(active_matrix, inverse_sum_all)
+        count_inverse_sum_all_matrix = np.multiply(count_active_matrix, inverse_sum_all)
 
-        print("Actual: %.3f, Solution: %.3f" % (objval, clone.solution.get_objective_value()))
+        inv_sum_all_sum = np.transpose(np.sum(inverse_sum_all_matrix, axis=0))
+        inv_sum_all_mean = np.transpose(np.mean(inverse_sum_all_matrix, axis=0))
+        inv_sum_all_std = np.transpose(np.std(inverse_sum_all_matrix, axis=0))
+        inv_sum_all_min = np.transpose(np.min(inverse_sum_all_matrix, axis=0))
+        inv_sum_all_max = np.transpose(np.max(inverse_sum_all_matrix, axis=0))
+        inv_sum_all_count = np.transpose(np.sum(count_inverse_sum_all_matrix, axis=0))
 
-        print self.get_num_branches()
+        # Add inverse sum all weighting features
+        self.features = np.c_[self.features, inv_sum_all_sum, inv_sum_all_mean, inv_sum_all_std, inv_sum_all_min, inv_sum_all_max, inv_sum_all_count]
 
-        for i in range(self.get_num_branches()):
-        	node_data_clone = node_data[:]
-        	node_data_clone.append(self.get_branch(i)[1][0])
+        # Inverse sum candidate weighting
+        candidate_matrix = active_matrix[:, candidates]
+        count_candidate_matrix = candidate_matrix != 0
+        inverse_sum_candidate = 1 / np.sum(candidate_matrix, axis=1)
+        inverse_sum_candidate[np.isnan(inverse_sum_candidate)] = 0
+        inverse_sum_candidate[np.isinf(inverse_sum_candidate)] = 0
+        inverse_sum_candidate_matrix = np.multiply(candidate_matrix, inverse_sum_candidate)
+        count_inverse_sum_candidate_matrix = np.multiply(count_candidate_matrix, inverse_sum_candidate)
 
-        	self.make_cplex_branch(i, node_data=node_data_clone)
+        inv_sum_candidate_sum = np.transpose(np.sum(inverse_sum_candidate_matrix, axis=0))
+        inv_sum_candidate_mean = np.transpose(np.mean(inverse_sum_candidate_matrix, axis=0))
+        inv_sum_candidate_std = np.transpose(np.std(inverse_sum_candidate_matrix, axis=0))
+        inv_sum_candidate_min = np.transpose(np.min(inverse_sum_candidate_matrix, axis=0))
+        inv_sum_candidate_max = np.transpose(np.max(inverse_sum_candidate_matrix, axis=0))
+        inv_sum_candidate_count = np.transpose(np.sum(count_inverse_sum_candidate_matrix, axis=0))
 
-c.register_callback(MyBranch)
-MyBranch.cplex = c
+        # Hack! Do filtering by candidates before
+        self.features = np.c_[self.features[candidates, :], inv_sum_candidate_sum, inv_sum_candidate_mean, inv_sum_candidate_std, inv_sum_candidate_min, inv_sum_candidate_max, inv_sum_candidate_count]
 
-# c.set_problem_type(c.problem_type.LP)
+        print self.features
 
-c.solve()
-
-dynamic_features =[]
-
-sol_vec = c.solution.get_values()
-
-for i,sol in enumerate(sol_vec):
-    dynamic_features.append([min(sol-math.floor(sol),math.ceil(sol)-sol),sol])
-
-for i,sol in enumerate(sol_vec):
-    dynamic_features[i].append(np.mean(constraint_degree_stat[i]))
-    dynamic_features[i].append(np.std(constraint_degree_stat[i]))
-    dynamic_features[i].append(np.amin(constraint_degree_stat[i]))
-    dynamic_features[i].append(np.amax(constraint_degree_stat[i]))
-
-print "dynamic features:", dynamic_features
-
-
-print(c.solution.get_objective_value())
