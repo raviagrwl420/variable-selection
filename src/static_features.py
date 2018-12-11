@@ -1,232 +1,94 @@
 import cplex
-from cplex.exceptions import CplexSolverError
-import sys
 import numpy as np
 
+from scipy.sparse import csr_matrix
 
-def lpex2(filename, method):
-    c = cplex.Cplex(filename)
+class StaticFeatures:
+    def __init__(self, cplex_instance):
+        self.num_vars = cplex_instance.variables.get_num()
+        self.var_names = cplex_instance.variables.get_names() # Simple list of strings
+        self.var_types = cplex_instance.variables.get_types() # Simple list of 'B', 'I' or 'C'
+        self.columns = cplex_instance.variables.get_cols() # List of SparsePair objects - SparsePair(ind=[], val=[])
+        self.num_rows = cplex_instance.linear_constraints.get_num()
+        self.rows = cplex_instance.linear_constraints.get_rows() # List of SparsePair objects - SparsePair(ind=[], val=[])
+        self.rhs = np.array(cplex_instance.linear_constraints.get_rhs()) # Simple list of values
+        self.obj = np.array(cplex_instance.objective.get_linear())
 
-    alg = c.parameters.lpmethod.values
+        # Generate the row x column matrix
+        self.matrix = csr_matrix((self.num_rows, self.num_vars))
+        for i, row in enumerate(self.rows):
+            data = np.array(row.val)
+            row_indices = np.empty(len(row.ind))
+            row_indices.fill(i)
+            col_indices = np.array(row.ind)
+            self.matrix += csr_matrix((data, (row_indices, col_indices)), shape=(self.num_rows, self.num_vars))
 
-    if method == "o":
-        c.parameters.lpmethod.set(alg.auto)
-    elif method == "p":
-        c.parameters.lpmethod.set(alg.primal)
-    elif method == "d":
-        c.parameters.lpmethod.set(alg.dual)
-    elif method == "b":
-        c.parameters.lpmethod.set(alg.barrier)
-        c.parameters.barrier.crossover.set(c.parameters.barrier.crossover.values.none)
-    elif method == "h":
-        c.parameters.lpmethod.set(alg.barrier)
-    elif method == "s":
-        c.parameters.lpmethod.set(alg.sifting)
-    elif method == "c":
-        c.parameters.lpmethod.set(alg.concurrent)
-    else:
-        print "Unrecognized option, using automatic"
-        c.parameters.lpmethod.set(alg.auto)
+        ## Part 1: Objective function coefficients
+        # 1. Raw obj function coefficients
+        raw = self.obj.copy().reshape(-1, 1)
 
+        # 2. Positive only obj function coefficients
+        positive_only = self.obj.copy().reshape(-1, 1)
+        positive_only[positive_only < 0] = 0
 
-    features = []
+        # 3. Negative only obj function coefficients
+        negative_only = self.obj.copy().reshape(-1, 1)
+        negative_only[negative_only > 0] = 0
 
-    for j,val in enumerate(c.objective.get_linear()):
-        if val>0:
-            features.append([val,val,0])
-        elif val<0:
-            features.append([val,0,val])
-        else:
-            features.append([0,0,0])
+        # Add 1, 2, 3 to features
+        self.features = np.c_[raw, positive_only, negative_only]
 
+        ## Part 2: Num. Constraints
+        # 4. Number of constraints that the variable participates in (with a non-zero coefficient)
+        non_zeros = self.matrix != 0
+        num_const_for_var = np.transpose(non_zeros.sum(0))
 
-    #column_count = c.variables.get_num()
-    #print c.variables.get_names()
-    #row_count = c.linear_constraints.get_num()
-    #print c.linear_constraints.get_names()
+        # Add 4 to features
+        self.features = np.c_[self.features, num_const_for_var]
 
+        ## Part 3: Stats for constraint degrees
+        num_var_for_const = non_zeros.sum(1)
+        degree_matrix = non_zeros.multiply(csr_matrix(num_var_for_const)).todense()
 
-    num_of_var_in_a_constraint = []
+        # 5. Mean of degrees
+        mean_degrees = np.transpose(np.mean(degree_matrix, axis=0))
 
-    for i, row in enumerate(c.linear_constraints.get_names()):
-        non_zero_in_a_row = 0
-        for j, var in enumerate(c.variables.get_names()):
-            if c.linear_constraints.get_coefficients(row, var) != 0:
-                non_zero_in_a_row = non_zero_in_a_row + 1
-        num_of_var_in_a_constraint.append(non_zero_in_a_row)
+        # 6. Stdev of degrees
+        std_degrees = np.transpose(np.std(degree_matrix, axis=0))
 
+        # 7. Min of degrees
+        min_degrees = np.transpose(np.min(degree_matrix, axis=0))
 
-    #number_of_contraints_a_variable_participate
-    #stats of constraints a variable participate
-    #stats of coefficients ( pos  and neg )  a variable particiapte
+        # 8. Max of degrees
+        max_degrees = np.transpose(np.max(degree_matrix, axis=0))
 
+        # Add 5, 6, 7, 8 to features
+        self.features = np.c_[self.features, mean_degrees, std_degrees, min_degrees, max_degrees]
 
-    for i, var in enumerate(c.variables.get_names()):
-        stats = np.array([])
-        count = 0
-        pos = np.array([])
-        neg = np.array([])
-        for j, row in enumerate(c.linear_constraints.get_names()):
-            constraint_coeff = c.linear_constraints.get_coefficients(row, var)
-            if constraint_coeff != 0:
-                count = count + 1
-                stats = np.append(stats,num_of_var_in_a_constraint[j])
-                if constraint_coeff < 0:
-                    neg = np.append(neg,constraint_coeff)
-                else:
-                    pos = np.append(pos,constraint_coeff)
+        ## Part 4: Stats for constraint coefficients
+        pos_coeffs = self.matrix > 0
+        pos_matrix = self.matrix.todense()
+        pos_matrix[pos_matrix < 0] = 0
+        neg_coeffs = self.matrix < 0
+        neg_matrix = self.matrix.todense()
+        neg_matrix[neg_matrix > 0] = 0
 
+        # 9, 10, 11, 12, 13
+        count_pos_coeffs = np.transpose(pos_coeffs.sum(0))
+        mean_pos_coeffs = np.transpose(np.mean(pos_matrix, axis=0))
+        std_pos_coeffs = np.transpose(np.std(pos_matrix, axis=0))
+        min_pos_coeffs = np.transpose(np.min(pos_matrix, axis=0))
+        max_pos_coeffs = np.transpose(np.max(pos_matrix, axis=0))
 
-        features[i].append(count)
-        features[i].append(np.mean(stats,axis=0))
-        features[i].append(np.std(stats, axis=0))
-        features[i].append(np.amin(stats, axis=0))
-        features[i].append(np.amax(stats, axis=0))
-        if len(pos)>0:
-            features[i].append(len(pos))
-            features[i].append(np.mean(pos,axis=0))
-            features[i].append(np.std(pos, axis=0))
-            features[i].append(np.amin(pos, axis=0))
-            features[i].append(np.amax(pos, axis=0))
-        else:
-            for i in range(5):
-                features[i].append(0)
-        if len(neg)>0:
-            features[i].append(len(neg))
-            features[i].append(np.mean(neg, axis=0))
-            features[i].append(np.std(neg, axis=0))
-            features[i].append(np.amin(neg, axis=0))
-            features[i].append(np.amax(neg, axis=0))
-        else:
-            for i in range(5):
-                features[i].append(0)
+        # Add 9, 10, 11, 12, 13 to features
+        self.features = np.c_[self.features, count_pos_coeffs, mean_pos_coeffs, std_pos_coeffs, min_pos_coeffs, max_pos_coeffs]
 
+        # 14, 15, 16, 17, 18
+        count_neg_coeffs = np.transpose(neg_coeffs.sum(0))
+        mean_neg_coeffs = np.transpose(np.mean(neg_matrix, axis=0))
+        std_neg_coeffs = np.transpose(np.std(neg_matrix, axis=0))
+        min_neg_coeffs = np.transpose(np.min(neg_matrix, axis=0))
+        max_neg_coeffs = np.transpose(np.max(neg_matrix, axis=0))
 
-
-
-    return features
-
-    #print number_of_contraints_a_variable_participate
-
-
-def normalize(features):
-    for arr in features:
-        max = np.amax(arr)
-        min = np.amin(arr)
-        for i in range(len(arr)):
-            arr[i] = (arr[i] - min)/(max - min)
-
-    print features
-
-    return features
-
-
-
-
-    '''
-    try:
-        c.solve()
-    except CplexSolverError:
-        print "Exception raised during solve"
-        return
-
-    # solution.get_status() returns an integer code
-    status = c.solution.get_status()
-    print c.solution.status[status]
-    if status == c.solution.status.unbounded:
-        print "Model is unbounded"
-        return
-    if status == c.solution.status.infeasible:
-        print "Model is infeasible"
-        return
-    if status == c.solution.status.infeasible_or_unbounded:
-        print "Model is infeasible or unbounded"
-        return
-
-    s_method = c.solution.get_method()
-    s_type = c.solution.get_solution_type()
-
-    print "Solution status = ", status, ":",
-    # the following line prints the status as a string
-    print c.solution.status[status]
-    print "Solution method = ", s_method, ":",
-    print c.solution.method[s_method]
-
-    if s_type == c.solution.type.none:
-        print "No solution available"
-        return
-    print "Objective value = ", c.solution.get_objective_value()
-
-    if s_type == c.solution.type.basic:
-        basis = c.solution.basis.get_col_basis()
-    else:
-        basis = None
-
-    print
-
-    x = c.solution.get_values(0, c.variables.get_num() - 1)
-    # because we're querying the entire solution vector,
-    # x = c.solution.get_values()
-    # would have the same effect
-    for j in range(c.variables.get_num()):
-        print "Column %d: Value = %17.10g" % (j, x[j])
-        if basis is not None:
-            if basis[j] == c.solution.basis.status.at_lower_bound:
-                print "  Nonbasic at lower bound"
-            elif basis[j] == c.solution.basis.status.basic:
-                print "  Basic"
-            elif basis[j] == c.solution.basis.status.at_upper_bound:
-                print "  Nonbasic at upper bound"
-            elif basis[j] == c.solution.basis.status.free_nonbasic:
-                print "  Superbasic, or free variable at zero"
-            else:
-                print "  Bad basis status"
-
-    infeas = c.solution.get_float_quality(c.solution.quality_metric.max_primal_infeasibility)
-    print "Maximum bound violation = ", infeas
-
-    '''
-
-import sys
-'''
-if __name__ == "__main__":
-    if len(sys.argv) != 3 or sys.argv[2] not in ["o", "p", "d", "b", "h", "s", "c"]:
-        print "Usage: lpex2.py filename algorithm"
-        print "  filename   Name of a file, with .mps, .lp, or .sav"
-        print "             extension, and a possible, additional .gz"
-        print "             extension"
-        print "  algorithm  one of the letters"
-        print "             o default"
-        print "             p primal simplex"
-        print "             d dual simplex"
-        print "             b barrier"
-        print "             h barrier with crossover"
-        print "             s sifting"
-        print "             c concurrent"
-        sys.exit(-1)
-    lpex2(sys.argv[1], sys.argv[2])
-else:
-    prompt = """Enter the path to a file with .mps, .lp, or .sav
-extension, and a possible, additional .gz extension:
-The path must be entered as a string; e.g. "my_model.mps"\n """
-    fname = input(prompt)
-    prompt = """Enter the letter indicating what optimization method
-should be used:
-    o default
-    p primal simplex
-    d dual simplex
-    b barrier
-    h barrier with crossover
-    s sifting
-    c concurrent \n"""
-    o = "o"
-    p = "p"
-    d = "d"
-    b = "b"
-    h = "h"
-    s = "s"
-    c = "c"
-    lpex2(fname, input(prompt))
-    '''
-features = lpex2('aligninq.mps','o')
-normalized_feature = normalize(features)
+        # Add 14, 15, 16, 17, 18 to features
+        self.features = np.c_[self.features, count_neg_coeffs, mean_neg_coeffs, std_neg_coeffs, min_neg_coeffs, max_neg_coeffs]
