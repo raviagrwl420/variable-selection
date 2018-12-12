@@ -16,6 +16,7 @@ The implementation uses Python 2.7 along with CPLEX 12.8.
 ### Dependencies
 * Pytorch 0.4.1
 * SciPy 1.1.0
+* Scikit Learn 0.20.1
 
 ## How to run
 ```
@@ -32,3 +33,4 @@ November 25th, 2018
 
 ## References
 * Graph Convolutional Networks (https://github.com/tkipf/pygcn)
+* SVM Rank (https://gist.github.com/agramfort/2071994)
