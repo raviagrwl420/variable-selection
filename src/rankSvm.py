@@ -22,25 +22,32 @@ def transform_pairwise(X, y):
     # If no group information attach dummy groups
     if y.ndim == 1:
         y = np.c_[y, np.ones(y.shape[0])]
-    
-    # Generate combinations
-    comb = itertools.combinations(range(X.shape[0]), 2)
-    
-    # Filter and balance the combinations
-    for k, (i, j) in enumerate(comb):
-        # Skip if same target or different group
-        if y[i, 0] == y[j, 0] or y[i, 1] != y[j, 1]:
-            continue
 
-        X_new.append(X[i] - X[j])
-        y_new.append(np.sign(y[i, 0] - y[j, 0]))
+    groups = np.unique(y[:, 1])
 
-        # Output balanced classes
-        if y_new[-1] != (-1) ** k:
-            y_new[-1] = -y_new[-1]
-            X_new[-1] = -X_new[-1]
+    for group in groups:
+        group_select = y[:, 1] == group 
+        X_group = X[group_select]
+        y_group = y[group_select]
 
-    return np.asarray(X_new), np.asarray(y_new).ravel()
+        # Generate combinations
+        combinations = itertools.combinations(range(X_group.shape[0]), 2)
+
+        # Filter and balance the combinations
+        for k, (i, j) in enumerate(combinations):
+            if y_group[i, 0] == y_group[j, 0]:
+                # Skip if same target
+                continue
+
+            X_new.append(X_group[i] - X_group[j])
+            y_new.append(np.sign(y_group[i, 0] - y_group[j, 0]))
+
+            # Output balanced classes
+            if y_new[-1] != (-1) ** k:
+                y_new[-1] = -y_new[-1]
+                X_new[-1] = -X_new[-1]
+
+    return np.asarray(X_new).reshape(-1, X.shape[1]), np.asarray(y_new).ravel()
 
 #input vector of X and y train and test vectors 
 def max_rank(X,y):
@@ -66,19 +73,22 @@ def max_rank(X,y):
 class RankSVM(svm.SVC):
     def __init__(self):
         super(RankSVM, self).__init__()
-        self.kernel = 'poly'
-        self.degree = 2
-        self.C = .1
+        # self.kernel = 'poly'
+        # self.degree = 2
+        # self.C = .1
         self.decision_function_shape = 'ovo'
         self.gamma = 'scale'
 
     def fit(self, X, y, sample_weight=None):
         X_trans, y_trans = transform_pairwise(X, y)
+        print X_trans.shape, y_trans.shape
         
         if not np.any(sample_weight):
             super(RankSVM, self).fit(X_trans, y_trans)
         else:
             super(RankSVM, self).fit(X_trans, y_trans, sample_weight=sample_weight)
+
+        print "Score", super(RankSVM, self).score(X_trans, y_trans)
 
         return self
 
@@ -102,12 +112,3 @@ class RankSVM(svm.SVC):
             score = np.append(score, self.rank_ovr(X, i))
 
         return np.argmax(score)
-
-r = RankSVM()
-
-X = np.random.randn(100, 20)
-y = np.r_[np.ones(50), np.zeros(50)]
-
-r.fit(X, y)
-
-r.max_rank(X)
