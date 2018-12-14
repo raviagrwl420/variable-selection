@@ -92,3 +92,10 @@ class StaticFeatures:
 
         # Add 14, 15, 16, 17, 18 to features
         self.features = np.c_[self.features, count_neg_coeffs, mean_neg_coeffs, std_neg_coeffs, min_neg_coeffs, max_neg_coeffs]
+
+        # Add additional data for dynamic features
+        self.sum_coeffs = np.sum(self.matrix, axis=1)
+        self.sum_pos_coeffs = np.sum(pos_matrix, axis=1)
+        self.sum_neg_coeffs = np.sum(neg_matrix, axis=1)
+        self.pos_coeff_matrix = csr_matrix(pos_matrix)
+        self.neg_coeff_matrix = csr_matrix(neg_matrix)
