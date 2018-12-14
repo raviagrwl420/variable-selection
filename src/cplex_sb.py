@@ -9,14 +9,20 @@ import cplex.callbacks as CPX_CB
 from static_features import StaticFeatures
 from dynamic_features import DynamicFeatures
 
-cplex = CPX.Cplex("data/miplib/30n20b8.mps")
-
 NUM_CANDIDATES = 20
 INFEASIBILITY = 1e6
 EPSILON = 1e-6
 LOWER_BOUND = 'L'
 UPPER_BOUND = 'U'
 OPTIMAL = 1
+
+# Branching Strategies
+SB = 'SB'
+SB_DEFAULT = 'SB_DEFAULT'
+SVM = 'SVM'
+PC = 'PC'
+PC_DEFAULT = 'PC_DEFAULT'
+NN = 'NN'
 
 def turn_cuts_off(cplex_instance):
 	cplex_instance.parameters.mip.cuts.bqp.set(-1)
@@ -36,8 +42,8 @@ def turn_cuts_off(cplex_instance):
 	cplex_instance.parameters.mip.cuts.zerohalfcut.set(-1)
 
 def set_parameters(cplex_instance):
-    cplex_instance.parameters.mip.strategy.variableselect.set(2)
-    cplex_instance.parameters.mip.limits.nodes.set(1)
+    cplex_instance.parameters.mip.strategy.variableselect.set(3)
+    cplex_instance.parameters.mip.limits.nodes.set(50000)
     cplex_instance.parameters.preprocessing.presolve.set(0)
     cplex_instance.parameters.mip.tolerances.integrality.set(EPSILON)
 
@@ -121,13 +127,12 @@ class MyBranch(CPX_CB.BranchCallback):
 
         return status, objective
 
-    def get_features(self, candidates):
+    def get_sb_scores(self, candidates):
         clone = self.get_clone()
 
         _, node_objective = solve_it_as_lp(clone)
 
-        max_var = None
-        max_sb_score = 0
+        sb_scores = []
         for var in candidates:
             _, lower_objective = self.get_branch_solution(clone, var, LOWER_BOUND)
             _, upper_objective = self.get_branch_solution(clone, var, UPPER_BOUND)
@@ -136,72 +141,115 @@ class MyBranch(CPX_CB.BranchCallback):
             delta_upper = max(upper_objective-node_objective, EPSILON)
 
             sb_score = delta_lower*delta_upper
-            if sb_score >= max_sb_score:
-                max_sb_score = sb_score
-                max_var = var
+            sb_scores.append(sb_score)
 
-        return max_var
+        return np.asarray(sb_scores)
+
+    def get_labels(self, sb_scores, alpha):
+        max_sb_score = np.max(sb_scores)
+
+        labels = sb_scores.copy()
+        labels[labels >= (1-alpha)*max_sb_score] = 1
+        labels[labels < (1-alpha)*max_sb_score] = 0
+
+        return labels.reshape(-1, 1)
 
     def get_dynamic_features(self, candidates):
         dyn_feat = DynamicFeatures(self, self.stat_feat, candidates)
+        return dyn_feat.features
 
-        # values = np.array(self.get_values())
-        # slacks = np.array(self.get_linear_slacks())
-        # # duals = self.get_dual_values()
-
-        # matrix, rhs = get_static_features(self.cplex)
-
-        # active_constraints = slacks == 0
-        # active_matrix = matrix[active_constraints, :]
-
-        # positive_rhs = rhs > 0
-        # negative_rhs = rhs < 0
-        # print positive_rhs
-        # print negative_rhs
-
+    def create_default_branches(self):
+        for branch in range(self.get_num_branches()):
+            self.make_cplex_branch(branch)
 
     def __call__(self):
+        # Increase num nodes
+        self.num_nodes = self.num_nodes + 1
+
         # Turn cuts off after root node
         if not self.cuts_off:
            turn_cuts_off(self.cplex)
            self.cuts_off = True
 
+        # If strategy is SB_DEFAULT or PC_DEFAULT then shortcut
+        if self.strategy == SB_DEFAULT:
+            self.cplex.parameters.mip.strategy.variableselect.set(3)
+            self.create_default_branches()
+            return
+        elif self.strategy == PC_DEFAULT:
+            self.cplex.parameters.mip.strategy.variableselect.set(2)
+            self.create_default_branches()
+            return
+
+        # If strategy is SB or SVM
         # Get candidate variables
         pseudocosts = self.get_pseudo_costs()
         values = self.get_values()
         candidates = get_candidates(pseudocosts, values)
 
-        # Get features
-        self.get_dynamic_features(candidates)
+        # Get SB scores
+        sb_scores = self.get_sb_scores(candidates)
 
-        sb_var = self.get_features(candidates)
-        sb_val = self.get_values(sb_var)
+        if self.strategy == SB:
+            branching_var = candidates[np.argmax(sb_scores)]
+        elif self.strategy == SVM:
+            features = self.get_dynamic_features(candidates)
+            labels = self.get_labels(sb_scores, self.alpha)
+            
+            groups = np.empty(labels.shape)
+            groups.fill(self.num_nodes)
+
+            labels_and_groups = np.c_[labels, groups]
+
+            if not hasattr(self, 'X'):
+                self.X = features
+                self.y = labels_and_groups
+            else:
+                self.X = np.r_[self.X, features]
+                self.y = np.r_[self.y, labels_and_groups]
+
+                print self.X.shape
+                print self.y.shape
+
+            if self.num_nodes < self.theta:
+                branching_var = candidates[np.argmax(sb_scores)]
+            elif self.num_nodes == self.theta:
+                np.save('X', self.X)
+                np.save('y', self.y)
+                print "Saved!"
+
+        
+        branching_val = self.get_values(branching_var)
         obj_val = self.get_objective_value()
 
         node_data = self.get_data()
 
-        branches = [(sb_var, LOWER_BOUND, floor(sb_val) + 1), (sb_var, UPPER_BOUND, floor(sb_val))]
+        branches = [(branching_var, LOWER_BOUND, floor(branching_val) + 1), 
+            (branching_var, UPPER_BOUND, floor(branching_val))]
 
-        for i in range(len(branches)):
+        for branch in branches:
             node_data_clone = node_data.copy()
             node_data_clone['branch_history'] = node_data['branch_history'][:]
-            
-            branch = branches[i]
             node_data_clone['branch_history'].append(branch)
-            # node_data_clone['branch_history'].append(self.get_branch(i)[1][0])
 
             self.make_branch(obj_val, variables=[branch], constraints=[], node_data=node_data_clone)
-            # self.make_cplex_branch(i, node_data=node_data_clone)
 
-stat_feat = StaticFeatures(cplex)
+def test_func(file_name):
+    cplex = CPX.Cplex(file_name)
 
-set_parameters(cplex)
+    stat_feat = StaticFeatures(cplex)
+    
+    cplex.register_callback(MyBranch)
+    MyBranch.cplex = cplex
+    MyBranch.stat_feat = stat_feat
+    MyBranch.cuts_off = False
+    MyBranch.strategy = SVM
+    MyBranch.num_nodes = 0
+    MyBranch.alpha = 0.2
+    MyBranch.theta = 500
 
-cplex.register_callback(MyBranch)
-MyBranch.cplex = cplex
-MyBranch.cuts_off = False
-MyBranch.stat_feat = stat_feat
+    cplex.solve()
 
-cplex.solve()
+    print cplex.solution.get_objective_value()
 
-print(cplex.solution.get_objective_value())
+test_func("data/miplib/binkar10_1.mps")

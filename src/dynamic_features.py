@@ -101,8 +101,6 @@ class DynamicFeatures:
         self.features = np.c_[self.features, pos_pos_ratio_min, pos_pos_ratio_max, pos_neg_ratio_min, pos_neg_ratio_max,
             neg_neg_ratio_min, neg_neg_ratio_max, neg_pos_ratio_min, neg_pos_ratio_max]
 
-        print self.features.shape
-
         # Part 7: Stats for active constraints
         slacks = np.array(branch_instance.get_linear_slacks())
         active_constraints = slacks == 0
