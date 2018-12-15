@@ -1,3 +1,4 @@
+import sys
 from math import floor
 
 import numpy as np
@@ -8,6 +9,7 @@ import cplex.callbacks as CPX_CB
 
 from static_features import StaticFeatures
 from dynamic_features import DynamicFeatures
+from rankSvm import RankSVM
 
 NUM_CANDIDATES = 20
 INFEASIBILITY = 1e6
@@ -44,6 +46,7 @@ def turn_cuts_off(cplex_instance):
 def set_parameters(cplex_instance):
     cplex_instance.parameters.mip.strategy.variableselect.set(3)
     cplex_instance.parameters.mip.limits.nodes.set(50000)
+    # cplex_instance.parameters.mip.tolerances.mipgap.set(0.00005)
     cplex_instance.parameters.preprocessing.presolve.set(0)
     cplex_instance.parameters.mip.tolerances.integrality.set(EPSILON)
 
@@ -187,37 +190,49 @@ class MyBranch(CPX_CB.BranchCallback):
         values = self.get_values()
         candidates = get_candidates(pseudocosts, values)
 
+        if len(candidates) == 0:
+            return
+
         # Get SB scores
-        sb_scores = self.get_sb_scores(candidates)
 
         if self.strategy == SB:
+            sb_scores = self.get_sb_scores(candidates)
             branching_var = candidates[np.argmax(sb_scores)]
         elif self.strategy == SVM:
             features = self.get_dynamic_features(candidates)
-            labels = self.get_labels(sb_scores, self.alpha)
-            
-            groups = np.empty(labels.shape)
-            groups.fill(self.num_nodes)
 
-            labels_and_groups = np.c_[labels, groups]
+            if self.num_nodes <= self.theta:
+                sb_scores = self.get_sb_scores(candidates)
 
-            if not hasattr(self, 'X'):
-                self.X = features
-                self.y = labels_and_groups
-            else:
-                self.X = np.r_[self.X, features]
-                self.y = np.r_[self.y, labels_and_groups]
+                labels = self.get_labels(sb_scores, self.alpha)
+                
+                groups = np.empty(labels.shape)
+                groups.fill(self.num_nodes)
 
-                print self.X.shape
-                print self.y.shape
+                labels_and_groups = np.c_[labels, groups]
+
+                if not hasattr(self, 'X'):
+                    self.X = features
+                    self.y = labels_and_groups
+                else:
+                    self.X = np.r_[self.X, features]
+                    self.y = np.r_[self.y, labels_and_groups]
 
             if self.num_nodes < self.theta:
                 branching_var = candidates[np.argmax(sb_scores)]
             elif self.num_nodes == self.theta:
-                np.save('X', self.X)
-                np.save('y', self.y)
-                print "Saved!"
-
+                if not hasattr(self, 'ranksvm'):
+                    self.ranksvm = RankSVM()
+                    self.ranksvm.fit(self.X, self.y)
+                    print "Done Fitting!"
+                branching_var = candidates[np.argmax(sb_scores)]
+            else:
+                if features.shape[0] == 1:
+                    branching_var = candidates[0]
+                else: 
+                    max_ind = self.ranksvm.max_rank(features)
+                    branching_var = candidates[max_ind]
+                print branching_var
         
         branching_val = self.get_values(branching_var)
         obj_val = self.get_objective_value()
@@ -237,6 +252,8 @@ class MyBranch(CPX_CB.BranchCallback):
 def test_func(file_name):
     cplex = CPX.Cplex(file_name)
 
+    set_parameters(cplex)
+
     stat_feat = StaticFeatures(cplex)
     
     cplex.register_callback(MyBranch)
@@ -252,4 +269,5 @@ def test_func(file_name):
 
     print cplex.solution.get_objective_value()
 
-test_func("data/miplib/binkar10_1.mps")
+# test_func("data/miplib/binkar10_1.mps")
+test_func(sys.argv[1])
