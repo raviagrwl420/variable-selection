@@ -1,9 +1,7 @@
-# CMPT 419/726: Machine Learning Course Project
-
-Python implementation for the machine learning course project titled "Variable Selection for Branching in Mixed Integer Linear Programming"
+# Variable Selection for Branching in Mixed Integer Linear Programming (MILP)
+We implemented variable selection for branching in MILP as the machine learning course project. The project was based on the paper titled "Learning to Branch in Mixed Integer Programming" by Khalil et al. (2016).
 
 ## Getting Started
-
 The implementation uses Python 2.7 along with CPLEX 12.8.
 
 ### Prerequisites
@@ -28,9 +26,7 @@ python main.py
 * Young Shin Oh
 * Christopher Abraham
 
-## Date
-November 25th, 2018
-
 ## References
+* Elias B. Khalil, Pierre Le Bodic, Le Song, George Nemhauser, and Bistra Dilkina. 2016. Learning to branch in Mixed Integer Programming. In Proceedings of the Thirtieth AAAI Conference on Artificial Intelligence (AAAI'16). AAAI Press 724-731.
 * Graph Convolutional Networks (https://github.com/tkipf/pygcn)
 * SVM Rank (https://gist.github.com/agramfort/2071994)
